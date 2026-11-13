@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "board": "polaris",
+  "version": "7.1.0-rc1",
+  "architecture": "arm64",
+  "status": "pending-config-port",
+  "source": "kernel",
+  "dts": "qcom/sdm845-xiaomi-polaris.dtb",
+  "output": "output",
+  "profiles": {}
+}
