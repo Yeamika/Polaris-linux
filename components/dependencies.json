@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "status": "pending-platform-selection",
+  "platform": {
+    "family": "sdm845",
+    "board": "polaris",
+    "upstream": "https://github.com/edk2-porting/edk2-sdm845.git",
+    "commit": null
+  },
+  "runtime": {
+    "url": "https://github.com/Yeamika/pj4edk2.git",
+    "commit": null
+  }
+}
