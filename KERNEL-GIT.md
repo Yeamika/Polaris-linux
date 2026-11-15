@@ -2,7 +2,7 @@
 
 直接使用 https://gitlab.com/sdm845-mainline/linux.git ，来源标签为 `sdm845-7.1-rc1-r0`，
 固定提交 `85f1df2a4ec71d7a91dd95a7a49f889d1595ffa8`，Makefile 版本为 `7.1.0-rc1`。
-以 gitlink 和 `provenance/kernel.json` 为准，不随上游分支自动更新。
+以 gitlink 和 `config/kernel-source.json` 为准，不随上游分支自动更新。
 
 ```sh
 git submodule update --init kernel

@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 root = Path(__file__).resolve().parents[1]
-lock = json.loads((root/'provenance/kernel.json').read_text())
+lock = json.loads((root/'config/kernel-source.json').read_text())
 try:
     kernel = root/'kernel'
     head = subprocess.check_output(['git', '-C', str(kernel), 'rev-parse', 'HEAD'], text=True).strip()
