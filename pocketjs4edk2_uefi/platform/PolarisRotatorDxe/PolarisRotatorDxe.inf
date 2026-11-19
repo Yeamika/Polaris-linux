@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x0001001B
+  BASE_NAME = PolarisRotatorDxe
+  FILE_GUID = a9bc49db-1706-4b48-b8ad-880acfe93509
+  MODULE_TYPE = DXE_DRIVER
+  ENTRY_POINT = InitializePolarisRotator
+[Sources]
+  PolarisRotatorDxe.c
+[Packages]
+  MdePkg/MdePkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  CacheMaintenanceLib
+  IoLib
+  DebugLib
+  TimerLib
+[Protocols]
+  gEfiClockProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadedImageProtocolGuid
+[Guids]
+  gEfiEventExitBootServicesGuid
+[Depex]
+  gEfiClockProtocolGuid AND gEfiGraphicsOutputProtocolGuid

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = LinuxBoot
+  FILE_GUID = 85a6b469-768b-45aa-90f8-9e22db414ae1
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  Native.c
+  NativeHandoff.c
+  NativeEnterKernel.S
+  NativeJournal.c
+  Handoff.c
+  Initrd.c
+  Diagnostics.c
+  BootOutput.c
+  ../Common/Loader.c
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  CacheMaintenanceLib
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  FdtLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadFile2ProtocolGuid
+  gEfiDevicePathProtocolGuid
+[Guids]
+  gEfiFileInfoGuid
+  gFdtTableGuid
+  gEfiEventExitBootServicesGuid
+  gEfiEventReadyToBootGuid

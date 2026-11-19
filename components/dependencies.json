@@ -1,14 +1,21 @@
 {
   "schema": 1,
-  "status": "pending-platform-selection",
+  "status": "renegade-baseline-buildable",
   "platform": {
     "family": "sdm845",
     "board": "polaris",
     "upstream": "https://github.com/edk2-porting/edk2-sdm845.git",
-    "commit": null
+    "commit": "e1952621f419f8db60ed28271264e1b5184c571d"
   },
   "runtime": {
     "url": "https://github.com/Yeamika/pj4edk2.git",
-    "commit": null
+    "commit": "554488ff89e1010ac87d62b7c941ac7872040972",
+    "usage": "shared ABI headers only; runtime integration pending"
+  },
+  "linux_efi": {
+    "url": "https://github.com/Yeamika/pj4edk2.git",
+    "branch": "linux-efi",
+    "commit": "ca18f81a94b44ed8a880deb59c02d22a93100848",
+    "usage": "shared FDT ABI headers"
   }
 }

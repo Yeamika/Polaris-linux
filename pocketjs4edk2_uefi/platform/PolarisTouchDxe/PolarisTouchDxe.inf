@@ -1,0 +1,36 @@
+[Defines]
+  INF_VERSION                    = 0x0001001B
+  BASE_NAME                      = PolarisTouchDxe
+  FILE_GUID                      = b930d3c4-53fa-4d65-b32b-19d14c8048e7
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = PolarisTouchEntry
+
+[Sources]
+  PolarisTouchDxe.c
+  TouchRmi.h
+  TouchGpioI2c.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  BaseMemoryLib
+  DebugLib
+  TimerLib
+
+[Protocols]
+  gQcomTlmmProtocolGuid
+  gQcomPmicVregProtocolGuid
+  gEfiAbsolutePointerProtocolGuid
+  gEfiDevicePathProtocolGuid
+
+[Guids]
+  gEfiEventExitBootServicesGuid
+
+[Depex]
+  gQcomTlmmProtocolGuid AND gQcomPmicVregProtocolGuid

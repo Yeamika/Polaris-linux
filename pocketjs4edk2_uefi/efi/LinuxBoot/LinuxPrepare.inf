@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = LinuxPrepare
+  FILE_GUID = 43af8f5c-63a6-448a-a20c-34cb28df1141
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  Prepare.c
+  Handoff.c
+  Initrd.c
+  Diagnostics.c
+  BootOutput.c
+  ../Common/Loader.c
+[Packages]
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  CacheMaintenanceLib
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  FdtLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadFile2ProtocolGuid
+  gEfiDevicePathProtocolGuid
+[Guids]
+  gEfiFileInfoGuid
+  gFdtTableGuid
+  gEfiEventExitBootServicesGuid
+  gEfiEventReadyToBootGuid

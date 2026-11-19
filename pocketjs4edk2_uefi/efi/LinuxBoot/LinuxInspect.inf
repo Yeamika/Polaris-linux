@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = LinuxInspect
+  FILE_GUID = 428b18a4-4bcf-4fa4-a811-83b220b35572
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  NativeJournal.c
+  Inspect.c
+  ExitTrace.c
+  ../Common/Loader.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  CacheMaintenanceLib
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  PrintLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+[Guids]
+  gEfiFileInfoGuid

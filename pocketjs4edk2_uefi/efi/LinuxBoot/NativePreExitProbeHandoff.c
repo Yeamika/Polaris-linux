@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#define POLARIS_NATIVE_PRE_EXIT_PROBE 1
+#include "NativeHandoff.c"

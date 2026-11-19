@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = LinuxNativePreExitProbe
+  FILE_GUID = 4c2be9b9-5b3d-470e-b64a-bbe88c61e0c1
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  NativeJournal.c
+  Native.c
+  Handoff.c
+  Initrd.c
+  Diagnostics.c
+  BootOutput.c
+  NativePreExitProbeHandoff.c
+  NativeEnterKernel.S
+  ../Common/Loader.c
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  CacheMaintenanceLib
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  FdtLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadFile2ProtocolGuid
+  gEfiDevicePathProtocolGuid
+[Guids]
+  gEfiFileInfoGuid
+  gFdtTableGuid
+  gEfiEventExitBootServicesGuid
+  gEfiEventReadyToBootGuid

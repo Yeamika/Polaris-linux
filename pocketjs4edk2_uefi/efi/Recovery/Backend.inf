@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = PolarisFastboot
+  FILE_GUID = d55bdd92-7535-43db-9729-7771f8e171b5
+  MODULE_TYPE = DXE_DRIVER
+  ENTRY_POINT = InitializePolarisFastboot
+[Sources]
+  Recovery.c
+  FastbootCore.c
+  PlatformServices.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  IoLib
+[Protocols]
+  gEfiUsbFunctionIoProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+[Guids]
+  gEfiEventExitBootServicesGuid
+[BuildOptions]
+  GCC:*_*_AARCH64_CC_FLAGS = -DPOLARIS_FASTBOOT_DXE -DPOLARIS_PLATFORM_SERVICES
+[Depex]
+  TRUE

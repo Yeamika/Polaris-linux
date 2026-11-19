@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = LinuxNativeProbe
+  FILE_GUID = 9bdc11d2-2407-4ac8-a8b0-01239f6e8153
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  NativeJournal.c
+  NativeProbe.c
+  Handoff.c
+  Initrd.c
+  Diagnostics.c
+  BootOutput.c
+  NativeProbeHandoff.c
+  NativeEnterKernel.S
+  ../Common/Loader.c
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  CacheMaintenanceLib
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  FdtLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadFile2ProtocolGuid
+  gEfiDevicePathProtocolGuid
+[Guids]
+  gEfiFileInfoGuid
+  gFdtTableGuid
+  gEfiEventExitBootServicesGuid
+  gEfiEventReadyToBootGuid
+
+[BuildOptions]
+  GCC:*_*_AARCH64_PP_FLAGS = -DPOLARIS_NATIVE_ENTRY_PROBE=1

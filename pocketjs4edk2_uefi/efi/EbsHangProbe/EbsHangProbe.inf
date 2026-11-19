@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = EbsHangProbe
+  FILE_GUID = b594be56-7256-4cb1-9b83-27072ba55f64
+  MODULE_TYPE = UEFI_APPLICATION
+  ENTRY_POINT = UefiMain
+[Sources]
+  EbsHangProbe.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  MemoryAllocationLib

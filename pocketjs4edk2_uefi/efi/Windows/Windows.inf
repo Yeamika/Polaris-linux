@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = Windows
+  FILE_GUID = 99636716-0e77-4799-bd99-6b91c23c426e
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.2
+  ENTRY_POINT = UefiMain
+[Sources]
+  Windows.c
+  Acpi.c
+  Platform.c
+  ../Common/Loader.c
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  Silicon/Qualcomm/QcomPkg/QcomPkg.dec
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  DevicePathLib
+  MemoryAllocationLib
+  MemoryMapHelperLib
+  PrintLib
+[Protocols]
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiGraphicsOutputProtocolGuid
+  gEfiAcpiTableProtocolGuid
+  gEfiAcpiSdtProtocolGuid
+  gEfiChipInfoProtocolGuid
+  gQcomSMEMProtocolGuid
+  gEfiPlatformInfoProtocolGuid
+[Guids]
+  gEfiFileInfoGuid
+  gFdtTableGuid
+  gEfiAcpi20TableGuid
+  gEfiSmbiosTableGuid
+  gEfiSmbios3TableGuid
+  gEfiEventReadyToBootGuid

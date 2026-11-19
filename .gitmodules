@@ -1,0 +1,8 @@
+[submodule "components/pj4edk2"]
+    path = components/pj4edk2
+    url = https://github.com/Yeamika/pj4edk2.git
+    branch = uefi
+[submodule "components/pj4edk2-linux-efi"]
+    path = components/pj4edk2-linux-efi
+    url = https://github.com/Yeamika/pj4edk2.git
+    branch = linux-efi

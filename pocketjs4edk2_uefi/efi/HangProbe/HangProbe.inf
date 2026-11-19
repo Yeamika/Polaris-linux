@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = HangProbe
+  FILE_GUID = b4a580a6-6b96-4398-9fb5-c5886952d235
+  MODULE_TYPE = UEFI_APPLICATION
+  ENTRY_POINT = UefiMain
+[Sources]
+  HangProbe.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib

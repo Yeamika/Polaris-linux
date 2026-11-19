@@ -1,0 +1,16 @@
+{
+  "mode": "uefi-loader",
+  "version": "Polaris PJ4EDK2",
+  "viewport": [1080, 2160],
+  "display_id": "gop-main",
+  "timeout_seconds": 0,
+  "default_entry_id": "android",
+  "esp_discovery": true,
+  "entries": [
+    {"id":"android","name":"Android","path":"\\EFI\\Android\\bootaa64.efi","icon":"system","parameters":{}},
+    {"id":"linux","name":"Linux","path":"\\EFI\\LinuxBoot\\bootaa64.efi","icon":"system","parameters":{}},
+    {"id":"windows","name":"Windows ARM64","path":"\\EFI\\Windows\\bootaa64.efi","icon":"system","parameters":{}},
+    {"id":"recovery","name":"USB recovery","path":"\\EFI\\Recovery\\bootaa64.efi","icon":"system","parameters":{}},
+    {"id":"simpleinit","name":"Fallback SimpleInit","path":"fv:6d77b2bb-69eb-42ab-becf-4f40c89568c3","icon":"system","parameters":{}}
+  ]
+}

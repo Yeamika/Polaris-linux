@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = Recovery
+  FILE_GUID = bbb59c78-c763-47aa-91b1-b746f025182e
+  MODULE_TYPE = UEFI_APPLICATION
+  VERSION_STRING = 0.1
+  ENTRY_POINT = UefiMain
+[Sources]
+  Recovery.c
+  FastbootCore.c
+  FastbootCore.h
+  PlatformServices.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  IoLib
+[Protocols]
+  gEfiUsbFunctionIoProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+
+[BuildOptions]
+  GCC:*_*_AARCH64_CC_FLAGS = -DPOLARIS_PLATFORM_SERVICES
