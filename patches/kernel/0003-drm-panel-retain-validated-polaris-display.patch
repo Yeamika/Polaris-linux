@@ -1,0 +1,80 @@
+Subject: [PATCH] drm/panel: retain verified Polaris firmware display on first prepare
+
+--- a/drivers/gpu/drm/panel/panel-novatek-nt35596s.c
++++ b/drivers/gpu/drm/panel/panel-novatek-nt35596s.c
+@@ -30,6 +30,14 @@
+ 
+ #include <video/mipi_display.h>
+ 
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++#include "../../../video/polaris-boot-display/polaris-boot-display.h"
++#endif
++
++static bool polaris_handoff = true;
++module_param(polaris_handoff, bool, 0400);
++MODULE_PARM_DESC(polaris_handoff, "Retain a verified Polaris boot panel on first prepare");
++
+ struct nt35596s_panel_cmd {
+ 	const char data[2];
+ };
+@@ -71,6 +79,7 @@
+ 	struct gpio_desc *reset_gpio;
+ 
+ 	bool prepared;
++	bool boot_handoff;
+ };
+ 
+ static inline struct nt35596s_panel *to_nt35596s_panel(struct drm_panel *panel)
+@@ -157,6 +166,29 @@
+ 	ret = regulator_bulk_enable(ARRAY_SIZE(pinfo->supplies), pinfo->supplies);
+ 	if (ret < 0)
+ 		return ret;
++
++	/* Only the first prepare may adopt the validated, live boot display.
++	 * Supplies are now owned by Linux and DCS verifies that the panel is
++	 * awake and displaying. A failed read or sleeping panel takes the normal
++	 * reset path below; suspend/resume always uses cold initialization. */
++	if (pinfo->boot_handoff) {
++		u8 power_mode = 0;
++		u8 awake = MIPI_DSI_DCS_POWER_MODE_DISPLAY |
++			   MIPI_DSI_DCS_POWER_MODE_NORMAL |
++			   MIPI_DSI_DCS_POWER_MODE_SLEEP;
++
++		pinfo->boot_handoff = false;
++		ret = mipi_dsi_dcs_get_power_mode(pinfo->link, &power_mode);
++		if (!ret && (power_mode & awake) == awake) {
++			dev_info(&pinfo->link->dev,
++				 "POLARIS_HANDOFF: retaining live panel, power mode 0x%02x; no reset\n",
++				 power_mode);
++			return 1;
++		}
++		dev_info(&pinfo->link->dev,
++			 "POLARIS_HANDOFF: panel adoption unavailable (%d, mode 0x%02x); cold init\n",
++			 ret, power_mode);
++	}
+ 
+ 	/*
+ 	 * As per downstream kernel, Reset sequence of Tianma FHD panel requires the panel to
+@@ -183,6 +215,10 @@
+ 	err = nt35596s_panel_power_on(pinfo);
+ 	if (err < 0)
+ 		goto poweroff;
++	if (err > 0) {
++		pinfo->prepared = true;
++		return 0;
++	}
+ 
+ 	/* send first part of init cmds */
+ 	err = nt35596s_send_cmds(panel, pinfo->desc->on_cmds,
+@@ -476,6 +512,11 @@
+ 		return dev_err_probe(dev, PTR_ERR(pinfo->reset_gpio),
+ 				     "failed to get reset gpio from DT\n");
+ 
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++	pinfo->boot_handoff = polaris_handoff &&
++		polaris_boot_display_handoff_available();
++#endif
++
+ 	drm_panel_init(&pinfo->base, dev, &panel_funcs, DRM_MODE_CONNECTOR_DSI);
+ 
+ 	/* DCS initialization needs the DSI host powered before panel prepare. */

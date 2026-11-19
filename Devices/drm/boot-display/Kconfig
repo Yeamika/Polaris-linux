@@ -1,0 +1,10 @@
+config POLARIS_BOOT_DISPLAY
+	bool "Polaris retained EFI fbcon window"
+	depends on ARM64 && OF && EFI && FB && FRAMEBUFFER_CONSOLE
+	select APERTURE_HELPERS
+	select FB_SYSMEM_HELPERS
+	select FRAMEBUFFER_CONSOLE_ROTATION
+	help
+	  Use shared KernelBoot fbcon in the EFI boot-output window. Present
+	  damaged RAM rows to the validated no-map/WC SDM845 scanout and drain
+	  all work through aperture removal before native MSM DRM takes over.

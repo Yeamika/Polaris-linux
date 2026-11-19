@@ -1,0 +1,18 @@
+Subject: [PATCH] drm/panel: nt35596s: prepare DSI host before panel
+
+The MSM bridge powers its host in pre_enable. The panel sends DCS commands
+in prepare, which runs before the host by default. On Polaris the first
+transfer therefore returns -EINVAL. Request the standard host-first order.
+
+--- a/drivers/gpu/drm/panel/panel-novatek-nt35596s.c
++++ b/drivers/gpu/drm/panel/panel-novatek-nt35596s.c
+@@ -478,6 +478,9 @@
+ 
+ 	drm_panel_init(&pinfo->base, dev, &panel_funcs, DRM_MODE_CONNECTOR_DSI);
+ 
++	/* DCS initialization needs the DSI host powered before panel prepare. */
++	pinfo->base.prepare_prev_first = true;
++
+ 	drm_panel_add(&pinfo->base);
+ 
+ 	return 0;

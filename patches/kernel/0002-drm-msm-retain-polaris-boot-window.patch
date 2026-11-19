@@ -1,0 +1,58 @@
+--- a/drivers/gpu/drm/msm/msm_fbdev.c
++++ b/drivers/gpu/drm/msm/msm_fbdev.c
+@@ -16,6 +16,10 @@
+ #include "msm_drv.h"
+ #include "msm_gem.h"
+ #include "msm_kms.h"
++
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++#include "../../../video/polaris-boot-display/polaris-native-fbcon.h"
++#endif
+ 
+ static bool fbdev = true;
+ MODULE_PARM_DESC(fbdev, "Enable fbdev compat layer");
+@@ -86,6 +90,17 @@
+ 	.fb_dirty = msm_fbdev_fb_dirty,
+ };
+ 
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++static void polaris_msm_fbdev_damage(void *context, unsigned int x,
++        unsigned int y, unsigned int width, unsigned int height)
++{
++    struct drm_fb_helper *helper = context;
++    struct drm_clip_rect clip = {x, y, x + width, y + height};
++
++    msm_fbdev_fb_dirty(helper, &clip);
++}
++#endif
++
+ int msm_fbdev_driver_fbdev_probe(struct drm_fb_helper *helper,
+ 				 struct drm_fb_helper_surface_size *sizes)
+ {
+@@ -144,6 +159,13 @@
+ 	fbi->fix.smem_start = paddr;
+ 	fbi->fix.smem_len = bo->size;
+ 
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++    ret = polaris_native_fbcon_prepare(fbi, polaris_msm_fbdev_damage, helper);
++    if (ret < 0)
++        drm_warn(dev, "Polaris boot window unavailable: %d\n", ret);
++#endif
++
++
+ 	DBG("par=%p, %dx%d", fbi->par, fbi->var.xres, fbi->var.yres);
+ 	DBG("allocated %dx%d fb", fb->width, fb->height);
+ 
+--- a/drivers/gpu/drm/drm_fb_helper.c
++++ b/drivers/gpu/drm/drm_fb_helper.c
+@@ -1610,6 +1610,10 @@
+ 		 */
+ 		info->fbcon_rotate_hint = FB_ROTATE_UR;
+ 	}
++    /* A driver may expose a software-rotated, bounded fbcon view while its
++     * native KMS framebuffer remains at the panel's physical geometry. */
++    if (info->var.rotate > FB_ROTATE_UR && info->var.rotate <= FB_ROTATE_CCW)
++        info->fbcon_rotate_hint = info->var.rotate;
+ }
+ 
+ /* Note: Drops fb_helper->lock before returning. */

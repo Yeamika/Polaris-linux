@@ -2,3 +2,7 @@
     path = kernel
     url = https://gitlab.com/sdm845-mainline/linux.git
     shallow = true
+[submodule "boot-display-common"]
+    path = components/boot-display
+    url = https://github.com/Yeamika/pj4edk2.git
+    branch = kernel-boot-display

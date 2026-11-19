@@ -1,0 +1,787 @@
+--- a/drivers/gpu/drm/msm/dsi/dsi.h
++++ b/drivers/gpu/drm/msm/dsi/dsi.h
+@@ -88,6 +88,11 @@
+ int msm_dsi_host_set_src_pll(struct mipi_dsi_host *host,
+ 			struct msm_dsi_phy *src_phy);
+ void msm_dsi_host_reset_phy(struct mipi_dsi_host *host);
++bool msm_dsi_host_adopt_boot_state(struct mipi_dsi_host *host,
++				  struct msm_dsi_phy *phy);
++void msm_dsi_host_release_boot_pm(struct mipi_dsi_host *host);
++bool msm_dsi_phy_boot_state_live(struct msm_dsi_phy *phy);
++void msm_dsi_phy_release_boot_state(struct msm_dsi_phy *phy);
+ void msm_dsi_host_get_phy_clk_req(struct mipi_dsi_host *host,
+ 	struct msm_dsi_phy_clk_request *clk_req,
+ 	bool is_bonded_dsi);
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -14,6 +14,7 @@
+ #include <linux/of_irq.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/pm_opp.h>
++#include <linux/pm_domain.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/spinlock.h>
+@@ -185,6 +186,9 @@
+ 	bool registered;
+ 	bool power_on;
+ 	bool enabled;
++	bool polaris_boot_handoff;
++	bool polaris_boot_pm;
++	unsigned int polaris_boot_link_refs;
+ 	int irq;
+ };
+ 
+@@ -379,9 +383,32 @@
+ 	return clk_bulk_prepare_enable(msm_host->num_bus_clks, msm_host->bus_clks);
+ }
+ 
++static int polaris_dsi_vote_boot_performance(struct msm_dsi_host *msm_host)
++{
++	struct device *dev = &msm_host->pdev->dev;
++	unsigned long freq = msm_host->byte_clk_rate;
++	struct dev_pm_opp *opp;
++	unsigned int state;
++
++	/* SDM845 DSI has one CX domain. Preserve its OPP voltage vote while
++	 * leaving validated live PLL/divider rates untouched, including DCS.
++	 */
++	opp = dev_pm_opp_find_freq_ceil(dev, &freq);
++	if (IS_ERR(opp))
++		return PTR_ERR(opp);
++	state = dev_pm_opp_get_required_pstate(opp, 0);
++	dev_pm_opp_put(opp);
++	if (!state)
++		return -EPROBE_DEFER;
++	return dev_pm_domain_set_performance_state(dev, state);
++}
++
+ int dsi_link_clk_set_rate_6g(struct msm_dsi_host *msm_host)
+ {
+ 	int ret;
++
++	if (msm_host->polaris_boot_handoff)
++		return polaris_dsi_vote_boot_performance(msm_host);
+ 
+ 	DBG("Set clk rates: pclk=%lu, byteclk=%lu",
+ 	    msm_host->pixel_clk_rate, msm_host->byte_clk_rate);
+@@ -460,6 +487,8 @@
+ 		goto byte_intf_clk_err;
+ 	}
+ 
++	if (msm_host->polaris_boot_handoff)
++		msm_host->polaris_boot_link_refs++;
+ 	return 0;
+ 
+ byte_intf_clk_err:
+@@ -469,6 +498,8 @@
+ byte_clk_err:
+ 	clk_disable_unprepare(msm_host->esc_clk);
+ error:
++	if (msm_host->polaris_boot_handoff && !msm_host->polaris_boot_link_refs)
++		dev_pm_domain_set_performance_state(&msm_host->pdev->dev, 0);
+ 	return ret;
+ }
+ 
+@@ -549,8 +580,15 @@
+ 
+ void dsi_link_clk_disable_6g(struct msm_dsi_host *msm_host)
+ {
+-	/* Drop the performance state vote */
+-	dev_pm_opp_set_rate(&msm_host->pdev->dev, 0);
++	/* A command's temporary reference must not drop the live video's vote. */
++	if (msm_host->polaris_boot_handoff) {
++		if (WARN_ON(!msm_host->polaris_boot_link_refs))
++			return;
++		if (!--msm_host->polaris_boot_link_refs)
++			dev_pm_domain_set_performance_state(&msm_host->pdev->dev, 0);
++	} else {
++		dev_pm_opp_set_rate(&msm_host->pdev->dev, 0);
++	}
+ 	clk_disable_unprepare(msm_host->esc_clk);
+ 	clk_disable_unprepare(msm_host->pixel_clk);
+ 	clk_disable_unprepare(msm_host->byte_intf_clk);
+@@ -808,6 +846,28 @@
+ 					MSM_DSI_6G_VER_MINOR_V2_5_0);
+ }
+ 
++static void dsi_ctrl_setup_cmd_dma(struct msm_dsi_host *msm_host)
++{
++	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
++	u32 data;
++
++	dsi_write(msm_host, REG_DSI_CMD_DMA_CTRL,
++			DSI_CMD_DMA_CTRL_FROM_FRAME_BUFFER |
++			DSI_CMD_DMA_CTRL_LOW_POWER);
++
++	data = 0;
++	/* Always assume dedicated TE pin */
++	data |= DSI_TRIG_CTRL_TE;
++	data |= DSI_TRIG_CTRL_MDP_TRIGGER(TRIGGER_NONE);
++	data |= DSI_TRIG_CTRL_DMA_TRIGGER(TRIGGER_SW);
++	data |= DSI_TRIG_CTRL_STREAM(msm_host->channel);
++	if ((cfg_hnd->major == MSM_DSI_VER_MAJOR_6G) &&
++		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2))
++		data |= DSI_TRIG_CTRL_BLOCK_DMA_WITHIN_FRAME;
++	dsi_write(msm_host, REG_DSI_TRIG_CTRL, data);
++
++}
++
+ static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
+ 			struct msm_dsi_phy_shared_timings *phy_shared_timings, struct msm_dsi_phy *phy)
+ {
+@@ -866,20 +926,7 @@
+ 		}
+ 	}
+ 
+-	dsi_write(msm_host, REG_DSI_CMD_DMA_CTRL,
+-			DSI_CMD_DMA_CTRL_FROM_FRAME_BUFFER |
+-			DSI_CMD_DMA_CTRL_LOW_POWER);
+-
+-	data = 0;
+-	/* Always assume dedicated TE pin */
+-	data |= DSI_TRIG_CTRL_TE;
+-	data |= DSI_TRIG_CTRL_MDP_TRIGGER(TRIGGER_NONE);
+-	data |= DSI_TRIG_CTRL_DMA_TRIGGER(TRIGGER_SW);
+-	data |= DSI_TRIG_CTRL_STREAM(msm_host->channel);
+-	if ((cfg_hnd->major == MSM_DSI_VER_MAJOR_6G) &&
+-		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2))
+-		data |= DSI_TRIG_CTRL_BLOCK_DMA_WITHIN_FRAME;
+-	dsi_write(msm_host, REG_DSI_TRIG_CTRL, data);
++	dsi_ctrl_setup_cmd_dma(msm_host);
+ 
+ 	data = DSI_CLKOUT_TIMING_CTRL_T_CLK_POST(phy_shared_timings->clk_post) |
+ 		DSI_CLKOUT_TIMING_CTRL_T_CLK_PRE(phy_shared_timings->clk_pre);
+@@ -2106,6 +2153,7 @@
+ 	mutex_destroy(&msm_host->cmd_mutex);
+ 	mutex_destroy(&msm_host->dev_mutex);
+ 
++	msm_dsi_host_release_boot_pm(host);
+ 	pm_runtime_disable(&msm_host->pdev->dev);
+ }
+ 
+@@ -2163,6 +2211,7 @@
+ {
+ 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+ 	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
++	int ret;
+ 
+ 	/* TODO: make sure dsi_cmd_mdp is idle.
+ 	 * Since DSI6G v1.2.0, we can set DSI_TRIG_CTRL.BLOCK_DMA_WITHIN_FRAME
+@@ -2174,9 +2223,16 @@
+ 	 * mdss interrupt is generated in mdp core clock domain
+ 	 * mdp clock need to be enabled to receive dsi interrupt
+ 	 */
+-	pm_runtime_get_sync(&msm_host->pdev->dev);
+-	cfg_hnd->ops->link_clk_set_rate(msm_host);
+-	cfg_hnd->ops->link_clk_enable(msm_host);
++	ret = pm_runtime_resume_and_get(&msm_host->pdev->dev);
++	if (ret < 0)
++		return ret;
++	ret = cfg_hnd->ops->link_clk_set_rate(msm_host);
++	if (!ret)
++		ret = cfg_hnd->ops->link_clk_enable(msm_host);
++	if (ret) {
++		pm_runtime_put(&msm_host->pdev->dev);
++		return ret;
++	}
+ 
+ 	/* TODO: vote for bus bandwidth */
+ 
+@@ -2378,10 +2434,105 @@
+ 	msm_host->cphy_mode = src_phy->cphy_mode;
+ }
+ 
++
++void msm_dsi_host_release_boot_pm(struct mipi_dsi_host *host)
++{
++	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
++
++	if (msm_host->polaris_boot_pm) {
++		msm_host->polaris_boot_pm = false;
++		pm_runtime_put(&msm_host->pdev->dev);
++	}
++}
++
++static bool polaris_dsi_rate_matches(unsigned long actual, unsigned long expected)
++{
++	unsigned long delta = actual > expected ? actual - expected : expected - actual;
++
++	/* Allow the fixed mode's kHz rounding, but reject another refresh rate. */
++	return actual && expected && delta <= expected / 1000;
++}
++
++bool msm_dsi_host_adopt_boot_state(struct mipi_dsi_host *host,
++				  struct msm_dsi_phy *phy)
++{
++	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
++	struct drm_display_mode *mode = msm_host->mode;
++	struct device *dev = &msm_host->pdev->dev;
++	unsigned long pixel, byte, intf, expected;
++	u32 ctrl, ah, av, total, hs, vs, vsh, video, lane_mask;
++	bool valid;
++	int ret;
++
++	if (!msm_dsi_phy_boot_state_live(phy) || msm_host->id != DSI_0 ||
++	    !mode || mode->hdisplay != 1080 || mode->vdisplay != 2160 ||
++	    msm_host->dsc || msm_host->cphy_mode || msm_host->lanes != 4 ||
++	    msm_host->format != MIPI_DSI_FMT_RGB888 || msm_host->channel ||
++	    !(msm_host->mode_flags & MIPI_DSI_MODE_VIDEO))
++		return false;
++
++	ret = pm_runtime_resume_and_get(dev);
++	if (ret < 0)
++		return false;
++	msm_host->polaris_boot_pm = true;
++
++	ctrl = dsi_read(msm_host, REG_DSI_CTRL);
++	ah = dsi_read(msm_host, REG_DSI_ACTIVE_H);
++	av = dsi_read(msm_host, REG_DSI_ACTIVE_V);
++	total = dsi_read(msm_host, REG_DSI_TOTAL);
++	hs = dsi_read(msm_host, REG_DSI_ACTIVE_HSYNC);
++	vs = dsi_read(msm_host, REG_DSI_ACTIVE_VSYNC_VPOS);
++	vsh = dsi_read(msm_host, REG_DSI_ACTIVE_VSYNC_HPOS);
++	video = dsi_read(msm_host, REG_DSI_VID_CFG0);
++	pixel = clk_get_rate(msm_host->pixel_clk);
++	byte = clk_get_rate(msm_host->byte_clk);
++	intf = clk_get_rate(msm_host->byte_intf_clk);
++	expected = mode->clock * 1000UL;
++	lane_mask = DSI_CTRL_LANE0 | DSI_CTRL_LANE1 | DSI_CTRL_LANE2 | DSI_CTRL_LANE3;
++
++	valid = (ctrl & (DSI_CTRL_ENABLE | DSI_CTRL_VID_MODE_EN | DSI_CTRL_CLK_EN |
++			 lane_mask)) == (DSI_CTRL_ENABLE | DSI_CTRL_VID_MODE_EN |
++					DSI_CTRL_CLK_EN | lane_mask) &&
++		ah == (DSI_ACTIVE_H_START(mode->htotal - mode->hsync_start) |
++		       DSI_ACTIVE_H_END(mode->htotal - mode->hsync_start + mode->hdisplay)) &&
++		av == (DSI_ACTIVE_V_START(mode->vtotal - mode->vsync_start) |
++		       DSI_ACTIVE_V_END(mode->vtotal - mode->vsync_start + mode->vdisplay)) &&
++		total == (DSI_TOTAL_H_TOTAL(mode->htotal - 1) |
++			  DSI_TOTAL_V_TOTAL(mode->vtotal - 1)) &&
++		hs == DSI_ACTIVE_HSYNC_END(mode->hsync_end - mode->hsync_start) &&
++		!vsh &&
++		vs == DSI_ACTIVE_VSYNC_VPOS_END(mode->vsync_end - mode->vsync_start) &&
++		(video & DSI_VID_CFG0_DST_FORMAT__MASK) ==
++			DSI_VID_CFG0_DST_FORMAT(dsi_get_vid_fmt(msm_host->format)) &&
++		polaris_dsi_rate_matches(pixel, expected) &&
++		polaris_dsi_rate_matches(byte, expected * 3 / 4) &&
++		/* Independent divider recalc can round a half-rate upward by 1 Hz. */
++		(intf == byte || (intf &&
++		 (intf * 2 == byte || intf * 2 == byte + 1 || intf * 2 + 1 == byte))) &&
++		msm_dsi_phy_boot_state_live(phy);
++
++	dev_info(dev,
++		 "POLARIS_DSI: host match=%d ctrl=%#x active=%#x/%#x total=%#x sync=%#x/%#x vsh=%#x video=%#x clocks=%lu/%lu/%lu\n",
++		 valid, ctrl, ah, av, total, hs, vs, vsh, video, pixel, byte, intf);
++	if (!valid) {
++		msm_dsi_host_release_boot_pm(host);
++		return false;
++	}
++
++	msm_host->pixel_clk_rate = pixel;
++	msm_host->byte_clk_rate = byte;
++	msm_host->byte_intf_clk_rate = intf;
++	msm_host->esc_clk_rate = clk_get_rate(msm_host->esc_clk);
++	msm_host->polaris_boot_handoff = true;
++	phy->polaris_boot_adopted = true;
++	return true;
++}
++
+ void msm_dsi_host_reset_phy(struct mipi_dsi_host *host)
+ {
+ 	struct msm_dsi_host *msm_host = to_msm_dsi_host(host);
+ 
++	msm_host->polaris_boot_handoff = false;
+ 	DBG("");
+ 	dsi_write(msm_host, REG_DSI_PHY_RESET, DSI_PHY_RESET_RESET);
+ 	/* Make sure fully reset */
+@@ -2399,7 +2550,8 @@
+ 	const struct msm_dsi_cfg_handler *cfg_hnd = msm_host->cfg_hnd;
+ 	int ret;
+ 
+-	ret = cfg_hnd->ops->calc_clk_rate(msm_host, is_bonded_dsi);
++	ret = msm_host->polaris_boot_handoff ? 0 :
++		cfg_hnd->ops->calc_clk_rate(msm_host, is_bonded_dsi);
+ 	if (ret) {
+ 		pr_err("%s: unable to calc clk rate, %d\n", __func__, ret);
+ 		return;
+@@ -2495,9 +2647,11 @@
+ 		goto unlock_ret;
+ 	}
+ 
+-	msm_host->byte_intf_clk_rate = msm_host->byte_clk_rate;
+-	if (phy_shared_timings->byte_intf_clk_div_2)
+-		msm_host->byte_intf_clk_rate /= 2;
++	if (!msm_host->polaris_boot_handoff) {
++		msm_host->byte_intf_clk_rate = msm_host->byte_clk_rate;
++		if (phy_shared_timings->byte_intf_clk_div_2)
++			msm_host->byte_intf_clk_rate /= 2;
++	}
+ 
+ 	msm_dsi_sfpb_config(msm_host, true);
+ 
+@@ -2526,9 +2680,18 @@
+ 		goto fail_disable_clk;
+ 	}
+ 
+-	dsi_timing_setup(msm_host, is_bonded_dsi);
+-	dsi_sw_reset(msm_host);
+-	dsi_ctrl_enable(msm_host, phy_shared_timings, phy);
++	if (msm_host->polaris_boot_handoff) {
++		/* Prepare Linux's command DMA and IRQs without stopping video. */
++		dsi_ctrl_setup_cmd_dma(msm_host);
++		dsi_write(msm_host, REG_DSI_ERR_INT_MASK0, 0x13ff3fe0);
++		dsi_intr_ctrl(msm_host, DSI_IRQ_MASK_ERROR, 1);
++		dev_info(&msm_host->pdev->dev,
++			 "POLARIS_DSI: live video host retained; no software reset\n");
++	} else {
++		dsi_timing_setup(msm_host, is_bonded_dsi);
++		dsi_sw_reset(msm_host);
++		dsi_ctrl_enable(msm_host, phy_shared_timings, phy);
++	}
+ 
+ 	msm_host->power_on = true;
+ 	mutex_unlock(&msm_host->dev_mutex);
+@@ -2579,6 +2742,7 @@
+ 	DBG("-");
+ 
+ 	msm_host->power_on = false;
++	msm_host->polaris_boot_handoff = false;
+ 
+ unlock_ret:
+ 	mutex_unlock(&msm_host->dev_mutex);
+--- a/drivers/gpu/drm/msm/dsi/dsi_manager.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+@@ -148,6 +148,8 @@
+ 	 */
+ 	if (IS_BONDED_DSI() && mdsi && sdsi) {
+ 		if (!mdsi->phy_enabled && !sdsi->phy_enabled) {
++			msm_dsi_phy_release_boot_state(mdsi->phy);
++			msm_dsi_phy_release_boot_state(sdsi->phy);
+ 			msm_dsi_host_reset_phy(mdsi->host);
+ 			msm_dsi_host_reset_phy(sdsi->host);
+ 
+@@ -163,8 +165,21 @@
+ 			}
+ 		}
+ 	} else {
+-		msm_dsi_host_reset_phy(msm_dsi->host);
++		bool handoff = !IS_BONDED_DSI() &&
++			msm_dsi_host_adopt_boot_state(msm_dsi->host, msm_dsi->phy);
++
++		if (!handoff) {
++			msm_dsi_phy_release_boot_state(msm_dsi->phy);
++			msm_dsi_host_reset_phy(msm_dsi->host);
++		}
+ 		ret = enable_phy(msm_dsi, &shared_timings[id]);
++		if (ret && handoff) {
++			/* A late loss of PLL lock falls back to a complete cold setup. */
++			msm_dsi_host_release_boot_pm(msm_dsi->host);
++			msm_dsi_phy_release_boot_state(msm_dsi->phy);
++			msm_dsi_host_reset_phy(msm_dsi->host);
++			ret = enable_phy(msm_dsi, &shared_timings[id]);
++		}
+ 		if (ret)
+ 			return ret;
+ 	}
+@@ -244,6 +259,10 @@
+ 	 * Enable before preparing the panel, disable after unpreparing, so
+ 	 * that the panel can communicate over the DSI link.
+ 	 */
++	/* Normal PHY/host/link references are now held; relinquish boot votes. */
++	msm_dsi_phy_release_boot_state(msm_dsi->phy);
++	msm_dsi_host_release_boot_pm(host);
++	msm_mdss_release_boot_handoff(msm_dsi->pdev->dev.parent);
+ 	msm_dsi_host_enable_irq(host);
+ 	if (is_bonded_dsi && msm_dsi1)
+ 		msm_dsi_host_enable_irq(msm_dsi1->host);
+@@ -253,8 +272,12 @@
+ host1_on_fail:
+ 	msm_dsi_host_power_off(host);
+ host_on_fail:
++	msm_dsi_host_release_boot_pm(host);
++	msm_dsi_phy_release_boot_state(msm_dsi->phy);
+ 	dsi_mgr_phy_disable(id);
+ phy_en_fail:
++	msm_dsi_host_release_boot_pm(host);
++	msm_dsi_phy_release_boot_state(msm_dsi->phy);
+ 	return ret;
+ }
+ 
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.c
+@@ -3,6 +3,7 @@
+  * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+  */
+ 
++#include <linux/clk.h>
+ #include <linux/clk-provider.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_clock.h>
+@@ -10,6 +11,50 @@
+ #include <dt-bindings/phy/phy.h>
+ 
+ #include "dsi_phy.h"
++
++void msm_dsi_phy_release_boot_clock(void *data)
++{
++	struct msm_dsi_phy *phy = data;
++
++	phy->polaris_boot_live = false;
++	if (phy->polaris_boot_clk) {
++		clk_disable_unprepare(phy->polaris_boot_clk);
++		clk_put(phy->polaris_boot_clk);
++		phy->polaris_boot_clk = NULL;
++	}
++}
++
++void msm_dsi_phy_release_boot_state(struct msm_dsi_phy *phy)
++{
++	if (!phy)
++		return;
++	phy->polaris_boot_adopted = false;
++	if (!phy->polaris_boot_resources)
++		return;
++
++	msm_dsi_phy_release_boot_clock(phy);
++	regulator_bulk_disable(phy->cfg->num_regulators, phy->supplies);
++	pm_runtime_put(&phy->pdev->dev);
++	phy->polaris_boot_resources = false;
++}
++
++static void dsi_phy_release_boot_resources(void *data)
++{
++	msm_dsi_phy_release_boot_state(data);
++}
++
++bool msm_dsi_phy_boot_state_live(struct msm_dsi_phy *phy)
++{
++	return phy && phy->polaris_boot_resources && phy->polaris_boot_live &&
++		phy->cfg->ops.boot_handoff_live &&
++		phy->cfg->ops.boot_handoff_live(phy);
++}
++
++static bool dsi_phy_may_adopt_boot_state(struct msm_dsi_phy *phy)
++{
++	return phy->id == DSI_0 && !phy->cphy_mode &&
++		phy->cfg->ops.boot_handoff_live && msm_mdss_boot_handoff_enabled();
++}
+ 
+ #define S_DIV_ROUND_UP(n, d)	\
+ 	(((n) >= 0) ? (((n) + (d) - 1) / (d)) : (((n) - (d) + 1) / (d)))
+@@ -693,6 +738,25 @@
+ 	if (ret < 0)
+ 		return dev_err_probe(dev, ret, "Unable to get iface clk\n");
+ 
++	/* Clock-provider registration can prepare the PLL while reparenting
++	 * DISPCC orphans. Acquire power and access clocks before those reads.
++	 * Keep this separate reference until the host owns its link clocks.
++	 */
++	if (dsi_phy_may_adopt_boot_state(phy)) {
++		ret = pm_runtime_resume_and_get(dev);
++		if (ret < 0)
++			return dev_err_probe(dev, ret, "boot DSI power unavailable\n");
++		ret = regulator_bulk_enable(phy->cfg->num_regulators, phy->supplies);
++		if (ret) {
++			pm_runtime_put(dev);
++			return ret;
++		}
++		phy->polaris_boot_resources = true;
++		ret = devm_add_action_or_reset(dev, dsi_phy_release_boot_resources, phy);
++		if (ret)
++			return ret;
++	}
++
+ 	if (phy->cfg->ops.pll_init) {
+ 		ret = phy->cfg->ops.pll_init(phy);
+ 		if (ret)
+@@ -756,6 +820,21 @@
+ 		DRM_DEV_ERROR(dev, "%s: regulator enable failed, %d\n",
+ 			__func__, ret);
+ 		goto reg_en_fail;
++	}
++
++	if (phy->polaris_boot_adopted) {
++		if (!msm_dsi_phy_boot_state_live(phy)) {
++			ret = -EAGAIN;
++			goto phy_en_fail;
++		}
++		if (phy->cfg->ops.boot_handoff_enable) {
++			ret = phy->cfg->ops.boot_handoff_enable(phy);
++			if (ret)
++				goto phy_en_fail;
++		}
++		memset(shared_timings, 0, sizeof(*shared_timings));
++		dev_info(dev, "POLARIS_DSI: live PHY retained; no reset or PLL restore\n");
++		return 0;
+ 	}
+ 
+ 	ret = phy->cfg->ops.enable(phy, clk_req);
+@@ -800,6 +879,7 @@
+ 	if (!phy || !phy->cfg->ops.disable)
+ 		return;
+ 
++	phy->polaris_boot_adopted = false;
+ 	phy->cfg->ops.disable(phy);
+ 
+ 	regulator_bulk_disable(phy->cfg->num_regulators, phy->supplies);
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy.h
+@@ -15,6 +15,8 @@
+ 
+ struct msm_dsi_phy_ops {
+ 	int (*pll_init)(struct msm_dsi_phy *phy);
++	bool (*boot_handoff_live)(struct msm_dsi_phy *phy);
++	int (*boot_handoff_enable)(struct msm_dsi_phy *phy);
+ 	int (*enable)(struct msm_dsi_phy *phy,
+ 			struct msm_dsi_phy_clk_request *clk_req);
+ 	void (*disable)(struct msm_dsi_phy *phy);
+@@ -121,7 +123,15 @@
+ 	struct clk_hw_onecell_data *provided_clocks;
+ 
+ 	bool state_saved;
++
++	/* One boot-only reference, transferred to the normal link clock users. */
++	struct clk *polaris_boot_clk;
++	bool polaris_boot_resources;
++	bool polaris_boot_live;
++	bool polaris_boot_adopted;
+ };
++
++void msm_dsi_phy_release_boot_clock(void *data);
+ 
+ /*
+  * PHY internal functions
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c
+@@ -332,11 +332,35 @@
+ 	writel(data | BIT(5), pll->phy->base + REG_DSI_10nm_PHY_CMN_CLK_CFG1);
+ }
+ 
++
++static bool dsi_10nm_boot_handoff_live(struct msm_dsi_phy *phy)
++{
++	u32 ctrl = readl(phy->base + REG_DSI_10nm_PHY_CMN_CTRL_0);
++	u32 cfg = readl(phy->base + REG_DSI_10nm_PHY_CMN_CLK_CFG1);
++
++	return (ctrl & (BIT(6) | BIT(5))) == (BIT(6) | BIT(5)) &&
++		(cfg & BIT(5)) && !(cfg & BIT(2)) &&
++		(readl(phy->base + REG_DSI_10nm_PHY_CMN_PLL_CNTRL) & BIT(0)) &&
++		(readl(phy->pll_base + REG_DSI_10nm_PHY_PLL_COMMON_STATUS_ONE) & BIT(0)) &&
++		(readl(phy->base + REG_DSI_10nm_PHY_CMN_RBUF_CTRL) & BIT(0)) &&
++		(readl(phy->base + REG_DSI_10nm_PHY_CMN_LANE_CTRL0) & 0x1f) == 0x1f;
++}
++
+ static int dsi_pll_10nm_vco_prepare(struct clk_hw *hw)
+ {
+ 	struct dsi_pll_10nm *pll_10nm = to_pll_10nm(hw);
+ 	struct device *dev = &pll_10nm->phy->pdev->dev;
+ 	int rc;
++
++	/* The boot reference is acquired before publishing the provider. All
++	 * subsequent orphan reparent operations therefore borrow a running PLL.
++	 */
++	if (msm_dsi_phy_boot_state_live(pll_10nm->phy)) {
++		pll_10nm->phy->pll_on = true;
++		dev_info(dev, "POLARIS_DSI: locked boot PLL retained at %llu Hz\n",
++			 pll_10nm->vco_current_rate);
++		return 0;
++	}
+ 
+ 	dsi_pll_enable_pll_bias(pll_10nm);
+ 	if (pll_10nm->slave)
+@@ -691,6 +715,23 @@
+ 
+ 	pll_10nm->phy = phy;
+ 
++	phy->vco_hw = &pll_10nm->clk_hw;
++	if (phy->polaris_boot_resources) {
++		unsigned long rate;
++		u32 div = readl(phy->base + REG_DSI_10nm_PHY_CMN_CLK_CFG0);
++
++		rate = dsi_pll_10nm_vco_recalc_rate(phy->vco_hw, VCO_REF_CLK_RATE);
++		phy->polaris_boot_live = dsi_10nm_boot_handoff_live(phy) &&
++			rate >= phy->cfg->min_pll_rate && rate <= phy->cfg->max_pll_rate &&
++			(div & 0xf) && ((div >> 4) & 0xf);
++		dev_info(&pdev->dev,
++			 "POLARIS_DSI: firmware PLL live=%d ctrl=%#x lock=%#x cfg=%#x/%#x vco=%lu\n",
++			 phy->polaris_boot_live,
++			 readl(phy->base + REG_DSI_10nm_PHY_CMN_PLL_CNTRL),
++			 readl(phy->pll_base + REG_DSI_10nm_PHY_PLL_COMMON_STATUS_ONE),
++			 div, readl(phy->base + REG_DSI_10nm_PHY_CMN_CLK_CFG1), rate);
++	}
++
+ 	ret = pll_10nm_register(pll_10nm, phy->provided_clocks->hws);
+ 	if (ret) {
+ 		DRM_DEV_ERROR(&pdev->dev, "failed to register PLL: %d\n", ret);
+@@ -698,6 +739,24 @@
+ 	}
+ 
+ 	phy->vco_hw = &pll_10nm->clk_hw;
++
++	if (phy->polaris_boot_live) {
++		struct clk *clk = clk_hw_get_clk(phy->vco_hw, "polaris-boot-handoff");
++
++		if (IS_ERR(clk))
++			return PTR_ERR(clk);
++		ret = clk_prepare_enable(clk);
++		if (ret) {
++			clk_put(clk);
++			return ret;
++		}
++		phy->polaris_boot_clk = clk;
++		/* Must run before devm unregisters the clock hardware. */
++		ret = devm_add_action_or_reset(&pdev->dev,
++				msm_dsi_phy_release_boot_clock, phy);
++		if (ret)
++			return ret;
++	}
+ 
+ 	/* TODO: Remove this when we have proper display handover support */
+ 	msm_dsi_phy_pll_save_state(phy);
+@@ -736,6 +795,22 @@
+ 		writel(0x3, lane_base + REG_DSI_10nm_PHY_LN_LPRX_CTRL(phy_lane_0));
+ 	else
+ 		writel(0, lane_base + REG_DSI_10nm_PHY_LN_LPRX_CTRL(phy_lane_0));
++}
++
++static int dsi_10nm_boot_handoff_enable(struct msm_dsi_phy *phy)
++{
++	void __iomem *reg = phy->lane_base + REG_DSI_10nm_PHY_LN_LPRX_CTRL(0);
++	u32 before = readl(reg);
++	u32 after;
++
++	/* Cold PHY setup enables the command receiver. Firmware may leave it
++	 * off after drawing; enable only lane 0 RX, retaining live TX timings.
++	 */
++	writel(before | 0x3, reg);
++	after = readl(reg);
++	dev_info(&phy->pdev->dev, "POLARIS_DSI: inherited lane0 RX %#x -> %#x\n",
++		 before, after);
++	return (after & 0x3) == 0x3 ? 0 : -EIO;
+ }
+ 
+ static void dsi_phy_hw_v3_0_lane_settings(struct msm_dsi_phy *phy)
+@@ -1006,6 +1081,8 @@
+ 		.enable = dsi_10nm_phy_enable,
+ 		.disable = dsi_10nm_phy_disable,
+ 		.pll_init = dsi_pll_10nm_init,
++		.boot_handoff_live = dsi_10nm_boot_handoff_live,
++		.boot_handoff_enable = dsi_10nm_boot_handoff_enable,
+ 		.save_pll_state = dsi_10nm_pll_save_state,
+ 		.restore_pll_state = dsi_10nm_pll_restore_state,
+ 		.parse_dt_properties = dsi_10nm_phy_parse_dt,
+--- a/drivers/gpu/drm/msm/msm_drv.h
++++ b/drivers/gpu/drm/msm/msm_drv.h
+@@ -429,9 +429,13 @@
+ #ifdef CONFIG_DRM_MSM_MDSS
+ void msm_mdss_register(void);
+ void msm_mdss_unregister(void);
++bool msm_mdss_boot_handoff_enabled(void);
++void msm_mdss_release_boot_handoff(struct device *dev);
+ #else
+ static inline void msm_mdss_register(void) {}
+ static inline void msm_mdss_unregister(void) {}
++static inline bool msm_mdss_boot_handoff_enabled(void) { return false; }
++static inline void msm_mdss_release_boot_handoff(struct device *dev) {}
+ #endif
+ 
+ #ifdef CONFIG_DEBUG_FS
+--- a/drivers/gpu/drm/msm/msm_mdss.c
++++ b/drivers/gpu/drm/msm/msm_mdss.c
+@@ -20,6 +20,24 @@
+ 
+ #include "msm_kms.h"
+ 
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++#include "../../../video/polaris-boot-display/polaris-boot-display.h"
++#endif
++
++static bool polaris_dsi_handoff;
++module_param(polaris_dsi_handoff, bool, 0444);
++MODULE_PARM_DESC(polaris_dsi_handoff, "Adopt validated Polaris firmware DSI state once");
++
++bool msm_mdss_boot_handoff_enabled(void)
++{
++#if IS_ENABLED(CONFIG_POLARIS_BOOT_DISPLAY)
++	return polaris_dsi_handoff && polaris_boot_display_handoff_available();
++#else
++	return false;
++#endif
++}
++
++
+ #include <generated/mdss.xml.h>
+ 
+ #define MIN_IB_BW	400000000UL /* Min ib vote 400MB */
+@@ -35,6 +53,7 @@
+ 	struct clk_bulk_data *clocks;
+ 	size_t num_clocks;
+ 	bool is_mdp5;
++	bool polaris_boot_pm;
+ 	struct {
+ 		unsigned long enabled_mask;
+ 		struct irq_domain *domain;
+@@ -45,6 +64,28 @@
+ 	u32 num_mdp_paths;
+ 	struct icc_path *reg_bus_path;
+ };
++
++static void msm_mdss_release_boot_pm(void *data)
++{
++	struct msm_mdss *mdss = data;
++
++	if (!mdss->polaris_boot_pm)
++		return;
++	mdss->polaris_boot_pm = false;
++	pm_runtime_put(mdss->dev);
++	dev_info(mdss->dev, "POLARIS_DSI: boot MDSS power reference released\n");
++}
++
++void msm_mdss_release_boot_handoff(struct device *dev)
++{
++	struct msm_mdss *mdss;
++
++	if (!dev)
++		return;
++	mdss = dev_get_drvdata(dev);
++	if (mdss)
++		msm_mdss_release_boot_pm(mdss);
++}
+ 
+ static int msm_mdss_parse_data_bus_icc_path(struct device *dev,
+ 					    struct msm_mdss *msm_mdss)
+@@ -344,6 +385,7 @@
+ 	struct platform_device *pdev = to_platform_device(msm_mdss->dev);
+ 	int irq;
+ 
++	msm_mdss_release_boot_pm(msm_mdss);
+ 	pm_runtime_suspend(msm_mdss->dev);
+ 	pm_runtime_disable(msm_mdss->dev);
+ 	irq_domain_remove(msm_mdss->irq_controller.domain);
+@@ -524,6 +566,26 @@
+ 		return PTR_ERR(mdss);
+ 
+ 	platform_set_drvdata(pdev, mdss);
++
++	/* A DSI child's version probe takes and drops runtime PM before the PHY
++	 * child exists. Keep the parent alive across that first probe/deferral;
++	 * otherwise its NO_STAY_ON GDSC can erase the running firmware PLL.
++	 */
++	if (msm_mdss_boot_handoff_enabled()) {
++		ret = pm_runtime_resume_and_get(dev);
++		if (ret < 0) {
++			msm_mdss_destroy(mdss);
++			return ret;
++		}
++		mdss->polaris_boot_pm = true;
++		ret = devm_add_action_or_reset(dev, msm_mdss_release_boot_pm, mdss);
++		if (ret) {
++			msm_mdss_destroy(mdss);
++			return ret;
++		}
++		dev_info(dev, "POLARIS_DSI: boot MDSS power held before child probes\n");
++	}
++
+ 
+ 	/*
+ 	 * MDP5/DPU based devices don't have a flat hierarchy. There is a top
